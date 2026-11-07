@@ -1,8 +1,53 @@
 <img src="https://github.com/user-attachments/assets/25d71cea-101a-4813-b54d-8ae8259ff2e4" width="386" alt="gemcap logo">
 
-# Gemcap
+# Gemcap (auto-compiled fork)
 
 An Android browser for the Gemini protocol, built with Kotlin.
+
+> **This is a fork of [hugmouse/gemcap](https://github.com/hugmouse/gemcap) that builds a ready-to-install APK.**
+> The upstream project doesn't publish APKs, so a GitHub Action here builds the latest upstream code and posts it to [Releases](https://github.com/KScheid/gemcap_compiled/releases). All credit for the app goes to the original developer.
+
+## Install
+
+### With Obtainium (recommended — gets updates automatically)
+
+[<img src="https://raw.githubusercontent.com/ImranR98/Obtainium/main/assets/graphics/badge_obtainium.png" alt="Get it on Obtainium" height="60">](https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/KScheid/gemcap_compiled)
+
+Tap the badge on your Android phone with [Obtainium](https://github.com/ImranR98/Obtainium) installed.
+If the link doesn't open, add the app manually in Obtainium with this URL:
+
+```
+https://github.com/KScheid/gemcap_compiled
+```
+
+### Manual download
+
+Grab the `.apk` from the [latest release](https://github.com/KScheid/gemcap_compiled/releases/latest) and install it.
+
+- Requires Android 10 or newer.
+- This build is **not** signed with the developer's key, so it can't update a copy installed from Google Play. Uninstall that one first.
+
+## How the builds work
+
+- The [Build & Release APK](.github/workflows/build-release.yml) workflow checks upstream once a day.
+- If upstream has new commits, it builds a release APK, signs it, and publishes a new release.
+- If nothing changed, it skips — no duplicate releases.
+- Version numbers are upstream's version plus the build number (e.g. `11.0.3`), so every build counts as an update.
+- To build right now: **Actions → Build & Release APK → Run workflow** (tick *force* to rebuild even if upstream is unchanged).
+
+### Signing key
+
+- By default, APKs are signed with `signing/fallback.jks`. Its password is public (it's in the workflow), so it only keeps updates consistent — it isn't a secret.
+- To sign with a private key instead, add these repo secrets (**Settings → Secrets and variables → Actions**):
+  - `KEYSTORE_BASE64` — the keystore file, base64-encoded
+  - `KEYSTORE_PASSWORD`
+  - `KEY_ALIAS`
+  - `KEY_PASSWORD` — optional, defaults to `KEYSTORE_PASSWORD`
+- Switching keys changes the app's signature, so you'll need to uninstall and reinstall once.
+
+---
+
+*Original upstream README below.*
 
 ## Join the closed testing
 

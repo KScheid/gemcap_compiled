@@ -1,0 +1,164 @@
+name: Build & Release APK
+
+# Builds the latest upstream Gemcap source (hugmouse/gemcap) and publishes a
+# signed APK to this fork's Releases, so Obtainium can install and update it.
+#
+# - Runs daily and skips if upstream hasn't changed since the last release.
+# - Run it by hand from the Actions tab; tick "force" to rebuild anyway.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/build-release.yml"
+  schedule:
+    - cron: "17 9 * * *" # daily, 09:17 UTC
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Build even if upstream hasn't changed"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-release
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: hugmouse/gemcap
+  UPSTREAM_BRANCH: master
+
+jobs:
+  build:
+    name: Build and release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout this fork (signing key, scripts)
+        uses: actions/checkout@v4
+        with:
+          path: fork
+
+      - name: Check upstream for new commits
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA=$(git ls-remote "https://github.com/${UPSTREAM_REPO}" "refs/heads/${UPSTREAM_BRANCH}" | cut -f1)
+          echo "Upstream ${UPSTREAM_REPO}@${UPSTREAM_BRANCH}: ${SHA}"
+
+          LAST=$(gh release view -R "$GITHUB_REPOSITORY" --json body -q .body 2>/dev/null \
+            | grep -oE 'upstream-commit: [0-9a-f]{40}' | cut -d' ' -f2 || true)
+          echo "Last released upstream commit: ${LAST:-none}"
+
+          BUILD=true
+          if [ "$SHA" = "$LAST" ] && [ "${{ inputs.force }}" != "true" ]; then
+            BUILD=false
+            echo "::notice::Upstream unchanged since last release — skipping build."
+          fi
+
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "short=${SHA:0:7}" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout upstream source
+        if: steps.upstream.outputs.build == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.UPSTREAM_REPO }}
+          ref: ${{ steps.upstream.outputs.sha }}
+          path: src
+
+      - name: Set up JDK 17
+        if: steps.upstream.outputs.build == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        if: steps.upstream.outputs.build == 'true'
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Android SDK
+        if: steps.upstream.outputs.build == 'true'
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK platform
+        if: steps.upstream.outputs.build == 'true'
+        run: sdkmanager "platforms;android-36"
+
+      - name: Give this build a unique, increasing version
+        id: version
+        if: steps.upstream.outputs.build == 'true'
+        working-directory: src
+        run: |
+          FILE=app/build.gradle.kts
+          CODE=$(grep -oP 'versionCode\s*=\s*\K[0-9]+' "$FILE")
+          NAME=$(grep -oP 'versionName\s*=\s*"\K[^"]+' "$FILE")
+          # Keep upstream's version, add the run number so every build is an upgrade.
+          NEW_CODE=$(( CODE * 100000 + GITHUB_RUN_NUMBER ))
+          NEW_NAME="${NAME}.${GITHUB_RUN_NUMBER}"
+          sed -i -E "s/(versionCode\s*=\s*)[0-9]+/\1${NEW_CODE}/" "$FILE"
+          sed -i -E "s/(versionName\s*=\s*\")[^\"]+(\")/\1${NEW_NAME}\2/" "$FILE"
+          echo "Upstream version ${NAME} (${CODE}) -> ${NEW_NAME} (${NEW_CODE})"
+          echo "name=$NEW_NAME" >> "$GITHUB_OUTPUT"
+          echo "upstream_name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Build release APK
+        if: steps.upstream.outputs.build == 'true'
+        working-directory: src
+        run: ./gradlew --stacktrace assembleRelease
+
+      - name: Sign APK
+        if: steps.upstream.outputs.build == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "Signing with private key from repo secrets."
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            KS="$RUNNER_TEMP/release.jks"
+            KEY_PASSWORD="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
+          else
+            echo "::warning::No KEYSTORE_BASE64 secret set — signing with the public fallback key in signing/fallback.jks."
+            KS="fork/signing/fallback.jks"
+            KEYSTORE_PASSWORD="gemcap-fork-public"
+            KEY_PASSWORD="gemcap-fork-public"
+            KEY_ALIAS="gemcap"
+          fi
+          export KEYSTORE_PASSWORD KEY_PASSWORD
+
+          BT=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          APKSIGNER="$ANDROID_HOME/build-tools/$BT/apksigner"
+          IN=$(ls src/app/build/outputs/apk/release/*.apk | head -1)
+          OUT="gemcap-${{ steps.version.outputs.name }}.apk"
+
+          "$APKSIGNER" sign \
+            --ks "$KS" --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEY_PASSWORD \
+            --out "$OUT" "$IN"
+          "$APKSIGNER" verify --print-certs "$OUT"
+          rm -f "$RUNNER_TEMP/release.jks"
+          echo "APK_PATH=$OUT" >> "$GITHUB_ENV"
+
+      - name: Publish GitHub Release
+        if: steps.upstream.outputs.build == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.name }}
+          name: Gemcap ${{ steps.version.outputs.name }}
+          make_latest: true
+          files: ${{ env.APK_PATH }}
+          body: |
+            Automated build of [Gemcap](https://github.com/${{ env.UPSTREAM_REPO }}) — upstream version ${{ steps.version.outputs.upstream_name }}, commit [`${{ steps.upstream.outputs.short }}`](https://github.com/${{ env.UPSTREAM_REPO }}/commit/${{ steps.upstream.outputs.sha }}).
+
+            Install or update with [Obtainium](https://github.com/ImranR98/Obtainium), or download the APK below.
+
+            upstream-commit: ${{ steps.upstream.outputs.sha }}
