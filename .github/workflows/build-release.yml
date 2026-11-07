@@ -65,6 +65,7 @@ jobs:
           echo "build=$BUILD" >> "$GITHUB_OUTPUT"
 
       - name: Checkout upstream source
+        id: s_src
         if: steps.upstream.outputs.build == 'true'
         uses: actions/checkout@v5
         with:
@@ -74,6 +75,7 @@ jobs:
 
       # Upstream's gradle/gradle-daemon-jvm.properties asks for Oracle JDK 25.
       - name: Set up JDK 25
+        id: s_java
         if: steps.upstream.outputs.build == 'true'
         uses: actions/setup-java@v5
         with:
@@ -81,14 +83,17 @@ jobs:
           java-version: "25"
 
       - name: Set up Gradle
+        id: s_gradle
         if: steps.upstream.outputs.build == 'true'
         uses: gradle/actions/setup-gradle@v4
 
       - name: Set up Android SDK
+        id: s_sdk
         if: steps.upstream.outputs.build == 'true'
         uses: android-actions/setup-android@v3
 
       - name: Install Android SDK platform
+        id: s_platform
         if: steps.upstream.outputs.build == 'true'
         run: sdkmanager "platforms;android-36" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"; exit ${PIPESTATUS[0]}
 
@@ -110,6 +115,7 @@ jobs:
           echo "upstream_name=$NAME" >> "$GITHUB_OUTPUT"
 
       - name: Build release APK
+        id: s_build
         if: steps.upstream.outputs.build == 'true'
         working-directory: src
         run: |
@@ -117,6 +123,7 @@ jobs:
           ./gradlew --stacktrace assembleRelease 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
 
       - name: Sign APK
+        id: s_sign
         if: steps.upstream.outputs.build == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -158,8 +165,10 @@ jobs:
           if [ -f "$RUNNER_TEMP/ci.log" ]; then
             TAIL=$(grep -vE '^\s*$' "$RUNNER_TEMP/ci.log" | tail -n 40)
           else
-            TAIL="No build log — failed before Gradle ran (check the setup steps)."
+            TAIL="No build log — failed before Gradle ran."
           fi
+          TAIL="Step results: checkout-upstream=${{ steps.s_src.outcome }} java=${{ steps.s_java.outcome }} gradle-setup=${{ steps.s_gradle.outcome }} android-sdk=${{ steps.s_sdk.outcome }} platform=${{ steps.s_platform.outcome }} version=${{ steps.version.outcome }} build=${{ steps.s_build.outcome }} sign=${{ steps.s_sign.outcome }}
+          $TAIL"
           printf '```\n%s\n```\n' "$TAIL" >> "$GITHUB_STEP_SUMMARY"
           # Annotations are visible from the commit's checks page.
           ENC=$(printf '%s' "$TAIL" | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
