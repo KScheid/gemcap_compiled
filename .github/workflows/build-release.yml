@@ -87,15 +87,17 @@ jobs:
         if: steps.upstream.outputs.build == 'true'
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Set up Android SDK
-        id: s_sdk
-        if: steps.upstream.outputs.build == 'true'
-        uses: android-actions/setup-android@v3
-
+      # The Ubuntu 24.04 runner ships with the Android SDK preinstalled.
+      # (android-actions/setup-android@v3 currently fails on GitHub's runners.)
       - name: Install Android SDK platform
         id: s_platform
         if: steps.upstream.outputs.build == 'true'
-        run: sdkmanager "platforms;android-36" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"; exit ${PIPESTATUS[0]}
+        run: |
+          set -o pipefail
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platforms;android-36" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
 
       - name: Give this build a unique, increasing version
         id: version
@@ -167,7 +169,7 @@ jobs:
           else
             TAIL="No build log — failed before Gradle ran."
           fi
-          TAIL="Step results: checkout-upstream=${{ steps.s_src.outcome }} java=${{ steps.s_java.outcome }} gradle-setup=${{ steps.s_gradle.outcome }} android-sdk=${{ steps.s_sdk.outcome }} platform=${{ steps.s_platform.outcome }} version=${{ steps.version.outcome }} build=${{ steps.s_build.outcome }} sign=${{ steps.s_sign.outcome }}
+          TAIL="Step results: checkout-upstream=${{ steps.s_src.outcome }} java=${{ steps.s_java.outcome }} gradle-setup=${{ steps.s_gradle.outcome }} platform=${{ steps.s_platform.outcome }} version=${{ steps.version.outcome }} build=${{ steps.s_build.outcome }} sign=${{ steps.s_sign.outcome }}
           $TAIL"
           printf '```\n%s\n```\n' "$TAIL" >> "$GITHUB_STEP_SUMMARY"
           # Annotations are visible from the commit's checks page.
